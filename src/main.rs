@@ -6,6 +6,7 @@ extern crate async_trait;
 
 mod commands;
 mod config;
+mod relative_time;
 mod source;
 
 use self::commands::{CliCommand, Command};
@@ -24,5 +25,6 @@ async fn main() -> Result<()> {
     let options: CLIOptions = CLIOptions::parse();
     match options.command {
         Command::Update(command) => command.run().await,
+        Command::RunDaemon(command) => command.run().await,
     }
 }

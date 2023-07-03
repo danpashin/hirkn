@@ -1,3 +1,4 @@
+mod daemon_cmd;
 mod update_cmd;
 
 use crate::config::Config;
@@ -12,8 +13,8 @@ pub(crate) trait CliCommand {
     async fn run(&self) -> Result<()>;
 }
 
-#[derive(clap::Parser)]
-struct GlobalOptions {
+#[derive(clap::Parser, Clone)]
+pub(crate) struct GlobalOptions {
     #[arg(
         long,
         short,
@@ -42,4 +43,5 @@ impl GlobalOptions {
 pub(crate) enum Command {
     #[clap(disable_version_flag = true)]
     Update(update_cmd::Command),
+    RunDaemon(daemon_cmd::Command),
 }

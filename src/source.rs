@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use tokio::task::JoinSet;
 use url::Url;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(default)]
 pub(crate) struct SetTemplate {
     pub(crate) family: types::NfFamily,
@@ -63,6 +63,24 @@ impl Source {
             Ok(results)
         } else {
             download_ips(first_url.clone()).await
+        }
+    }
+
+    pub(crate) fn create_set(&self, table_name: &str) -> schema::Set {
+        let template = self.set_template.clone();
+
+        schema::Set {
+            family: template.family,
+            table: table_name.to_string(),
+            name: self.set_name.clone(),
+            handle: None,
+            set_type: template.set_type,
+            policy: template.policy,
+            flags: template.flags,
+            elem: None,
+            timeout: template.timeout,
+            gc_interval: template.gc_interval,
+            size: None,
         }
     }
 }
