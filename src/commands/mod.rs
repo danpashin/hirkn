@@ -2,7 +2,7 @@ mod update_cmd;
 
 use crate::config::Config;
 use anyhow::Result;
-use std::path::{Path, PathBuf};
+use std::{fs, io::ErrorKind, path::PathBuf};
 
 static DEFAULT_CONFIG_PATH: &str = concat!("/etc/", env!("CARGO_PKG_NAME"), "/config.yaml");
 static EXAMPLE_CONFIG_PATH: &str = concat!("/etc/", env!("CARGO_PKG_NAME"), "/config.yaml.example");
@@ -26,14 +26,14 @@ struct GlobalOptions {
 
 impl GlobalOptions {
     pub(crate) fn parse_config(&self) -> Result<Config> {
-        let path = if self.config.exists() {
-            self.config.as_path()
-        } else {
-            std::fs::copy(EXAMPLE_CONFIG_PATH, DEFAULT_CONFIG_PATH)?;
-            Path::new(DEFAULT_CONFIG_PATH)
+        let is_default_config_missing = fs::metadata(DEFAULT_CONFIG_PATH)
+            .map_or_else(|error| error.kind() == ErrorKind::NotFound, |_| false);
+
+        if is_default_config_missing {
+            fs::copy(EXAMPLE_CONFIG_PATH, DEFAULT_CONFIG_PATH)?;
         };
 
-        Config::from_file(path)
+        Config::from_file(&self.config)
     }
 }
 
