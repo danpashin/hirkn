@@ -1,3 +1,6 @@
+mod cache;
+
+pub(crate) use self::cache::Cache as SourcesCache;
 use anyhow::Result;
 use ipnet::Ipv4Net;
 use nftables::{
@@ -43,7 +46,10 @@ pub(crate) struct Source {
 }
 
 impl Source {
-    pub(crate) async fn download_set(&self) -> Result<Vec<Expression>> {
+    pub(crate) async fn download_list(
+        &self,
+        sources_cache: SourcesCache,
+    ) -> Result<Vec<Expression>> {
         let Some(first_url) = self.urls.first() else {
             return Ok(vec![])
         };
@@ -51,7 +57,7 @@ impl Source {
         if self.urls.len() > 1 {
             let mut active_downloads = JoinSet::new();
             for url in &self.urls {
-                active_downloads.spawn(download_ips(url.clone()));
+                active_downloads.spawn(download_ips_list(url.clone(), sources_cache.clone()));
             }
 
             let mut results = vec![];
@@ -62,7 +68,7 @@ impl Source {
 
             Ok(results)
         } else {
-            download_ips(first_url.clone()).await
+            download_ips_list(first_url.clone(), sources_cache).await
         }
     }
 
@@ -85,12 +91,11 @@ impl Source {
     }
 }
 
-async fn download_ips(url: Url) -> Result<Vec<Expression>> {
+async fn download_ips_list(url: Url, sources_cache: SourcesCache) -> Result<Vec<Expression>> {
     let sources_string = if url.scheme() == "file" {
-        std::fs::read_to_string(url.path())?
+        download_imp::local(url, sources_cache).await?
     } else {
-        let response = reqwest::get(url.clone()).await?;
-        response.text().await?
+        download_imp::remote(url, sources_cache).await?
     };
 
     Ok(sources_string
@@ -111,4 +116,69 @@ async fn download_ips(url: Url) -> Result<Vec<Expression>> {
             }
         })
         .collect())
+}
+
+mod download_imp {
+    use super::SourcesCache;
+    use anyhow::Result;
+    use std::time::SystemTime;
+    use url::Url;
+
+    pub(super) async fn local(url: Url, sources_cache: SourcesCache) -> Result<String> {
+        let path = url.path();
+
+        let modified_since = std::fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|modified_since| modified_since.as_secs());
+
+        if let Some(modified_since) = modified_since {
+            let cache_is_newer = sources_cache
+                .get(&url)
+                .await
+                .map_or(false, |value| value >= modified_since);
+
+            if cache_is_newer {
+                return Ok(String::new());
+            }
+
+            sources_cache.set(&url, modified_since).await;
+        }
+
+        Ok(std::fs::read_to_string(url.path())?)
+    }
+
+    pub(super) async fn remote(url: Url, sources_cache: SourcesCache) -> Result<String> {
+        let client = reqwest::Client::new();
+
+        let response = client.head(url.clone()).send().await?;
+        let response = response.error_for_status()?;
+
+        #[allow(clippy::cast_sign_loss)]
+        let modified_since = response
+            .headers()
+            .get("Last-Modified")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|time_string| chrono::DateTime::parse_from_rfc2822(time_string).ok())
+            .map(|value| value.timestamp() as u64);
+
+        if let Some(modified_since) = modified_since {
+            let cache_is_newer = sources_cache
+                .get(&url)
+                .await
+                .map_or(false, |value| value >= modified_since);
+
+            if cache_is_newer {
+                return Ok(String::new());
+            }
+
+            sources_cache.set(&url, modified_since).await;
+        }
+
+        let response = client.get(url.clone()).send().await?;
+        let response = response.error_for_status()?;
+
+        Ok(response.text().await?)
+    }
 }

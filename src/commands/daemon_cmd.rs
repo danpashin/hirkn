@@ -1,4 +1,5 @@
 use super::{update_cmd::Command as UpdateCommand, CliCommand, GlobalOptions};
+use crate::source::SourcesCache;
 use anyhow::Result;
 use std::time::Duration;
 
@@ -17,6 +18,8 @@ impl CliCommand for Command {
         let shutdown = tokio_shutdown::Shutdown::new()?;
         let update_cmd = UpdateCommand::new(self.global_options.clone());
 
+        let cache = SourcesCache::new();
+
         eprintln!("Starting daemon...");
         loop {
             tokio::select! {
@@ -25,7 +28,7 @@ impl CliCommand for Command {
                         break;
                     },
                 _ = tokio::time::sleep(sleep_duration) => {
-                    if let Err(error) = update_cmd.perform_update(&config).await {
+                    if let Err(error) = update_cmd.perform_update(&config, cache.clone()).await {
                         eprintln!("Error when performing update command: {error:?}");
                     }
                 }

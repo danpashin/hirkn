@@ -1,5 +1,5 @@
 use super::{CliCommand, GlobalOptions};
-use crate::config::Config;
+use crate::{config::Config, source::SourcesCache};
 use anyhow::Result;
 use nftables::{batch::Batch, helper::apply_ruleset, schema::NfListObject};
 
@@ -16,12 +16,16 @@ impl Command {
         }
     }
 
-    pub(crate) async fn perform_update(&self, config: &Config) -> Result<()> {
+    pub(crate) async fn perform_update(
+        &self,
+        config: &Config,
+        sources_cache: SourcesCache,
+    ) -> Result<()> {
         let chunk_size = config.single_run_append_max.unwrap_or(usize::MAX);
         eprintln!("Using chunks of {chunk_size} elements for apply operations");
 
         for source in &config.sources {
-            let elements = source.download_set().await?;
+            let elements = source.download_list(sources_cache.clone()).await?;
             eprintln!(
                 "Downloaded {} elements for {} set. Applying...",
                 elements.len(),
@@ -50,7 +54,8 @@ impl Command {
 impl CliCommand for Command {
     async fn run(&self) -> Result<()> {
         let config = self.global_options.parse_config()?;
-        self.perform_update(&config).await?;
+        let cache = SourcesCache::new();
+        self.perform_update(&config, cache).await?;
 
         Ok(())
     }
