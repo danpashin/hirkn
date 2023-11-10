@@ -29,11 +29,12 @@ impl Command {
                 &config.table_name,
                 source.set_template.clone(),
             );
-            nfset.flush()?;
 
             let entries = source.download_list(sources_cache.clone()).await?;
-
-            nfset.load_entries(entries, chunk_size)?;
+            if !entries.is_empty() {
+                nfset.flush()?;
+                nfset.load_entries(entries, chunk_size)?;
+            }
         }
 
         log::info!("Successfully updated all sources!");
