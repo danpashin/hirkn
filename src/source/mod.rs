@@ -1,14 +1,14 @@
 mod cache;
+mod ip;
 
-pub(crate) use self::cache::Cache as SourcesCache;
+pub(crate) use self::{cache::Cache as SourcesCache, ip::IP};
 use anyhow::Result;
-use ipnet::Ipv4Net;
 use nftables::{
     expr::{Expression, NamedExpression, Prefix},
     schema, types,
 };
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashSet, LinkedList};
 use tokio::task::JoinSet;
 use url::Url;
 
@@ -43,76 +43,87 @@ pub(crate) struct Source {
     #[serde(default)]
     pub(crate) set_template: SetTemplate,
     pub(crate) urls: Vec<Url>,
+    pub(crate) entries_limit: usize,
 }
 
 impl Source {
-    pub(crate) async fn download_list(
-        &self,
-        sources_cache: SourcesCache,
-    ) -> Result<Vec<Expression>> {
+    pub(crate) async fn download_list(&self, cache: SourcesCache) -> Result<Vec<Expression>> {
         let Some(first_url) = self.urls.first() else {
-            return Ok(vec![])
+            return Ok(vec![]);
         };
 
-        if self.urls.len() > 1 {
-            let mut active_downloads = JoinSet::new();
-            for url in &self.urls {
-                active_downloads.spawn(download_ips_list(url.clone(), sources_cache.clone()));
+        if self.urls.len() == 1 {
+            let mut entries = download_ips_list(first_url.clone(), cache).await?;
+
+            if self.entries_limit != 0 && entries.len() > self.entries_limit {
+                log::warn!(
+                    "Source {} exceeds maximum ({}) number of entries. Got {}. Truncating...",
+                    first_url,
+                    self.entries_limit,
+                    entries.len()
+                );
+                entries.truncate(self.entries_limit);
             }
 
-            let mut results = vec![];
-            while let Some(download) = active_downloads.join_next().await {
-                let download = download?;
-                results.extend(download?.into_iter());
+            return Ok(entries);
+        }
+
+        let mut active_downloads = JoinSet::new();
+        for url in &self.urls {
+            active_downloads.spawn(download_ips_list(url.clone(), cache.clone()));
+        }
+
+        let mut entries = LinkedList::new();
+
+        while let Some(download) = active_downloads.join_next().await {
+            let download = download?;
+            if self.entries_limit != 0 && entries.len() >= self.entries_limit {
+                log::warn!(
+                    "Source exceeds total maximum ({}) number of entries. \
+                    Aborting all other urls...",
+                    self.entries_limit
+                );
+
+                active_downloads.abort_all();
+                break;
             }
 
-            Ok(results)
-        } else {
-            download_ips_list(first_url.clone(), sources_cache).await
+            entries.extend(download?.into_iter());
         }
-    }
 
-    pub(crate) fn create_set(&self, table_name: &str) -> schema::Set {
-        let template = self.set_template.clone();
-
-        schema::Set {
-            family: template.family,
-            table: table_name.to_string(),
-            name: self.set_name.clone(),
-            handle: None,
-            set_type: template.set_type,
-            policy: template.policy,
-            flags: template.flags,
-            elem: None,
-            timeout: template.timeout,
-            gc_interval: template.gc_interval,
-            size: None,
-        }
+        Ok(entries.into_iter().collect())
     }
 }
 
 async fn download_ips_list(url: Url, sources_cache: SourcesCache) -> Result<Vec<Expression>> {
-    let sources_string = if url.scheme() == "file" {
+    let entries = if url.scheme() == "file" {
         download_imp::local(url, sources_cache).await?
     } else {
         download_imp::remote(url, sources_cache).await?
     };
 
-    Ok(sources_string
+    // Optimization step
+    // Ignore empty lines and comments, verify entry is IP or subnet
+    let parsed_entries: Vec<_> = entries
         .lines()
-        .filter_map(|entry| {
-            if entry.is_empty() {
-                return None;
-            }
+        .filter(|entry| !(entry.is_empty() || entry.starts_with('#')))
+        .filter_map(|entry| entry.parse::<IP>().ok())
+        .collect();
 
-            if entry.contains('/') {
-                let subnet: Ipv4Net = entry.parse().ok()?;
-                Some(Expression::Named(NamedExpression::Prefix(Prefix {
-                    addr: Box::new(Expression::String(subnet.network().to_string())),
-                    len: u32::from(subnet.prefix_len()),
-                })))
-            } else {
-                Some(Expression::String(entry.to_string()))
+    drop(entries);
+
+    // Collect all ip's and networks back to strings
+    Ok(parsed_entries
+        .into_iter()
+        .map(|entry| match entry {
+            IP::Plain(ip) => Expression::String(ip.to_string()),
+            IP::Prefixed(ip_net) => {
+                let prefix = Prefix {
+                    addr: Box::new(Expression::String(ip_net.network().to_string())),
+                    len: u32::from(ip_net.prefix_len()),
+                };
+
+                Expression::Named(NamedExpression::Prefix(prefix))
             }
         })
         .collect())

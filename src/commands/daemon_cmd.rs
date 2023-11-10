@@ -17,18 +17,18 @@ impl CliCommand for Command {
         let update_cmd = UpdateCommand::new(self.global_options.clone());
 
         let cache = SourcesCache::new();
-        let mut update_interval = tokio::time::interval(config.auto_update.timeout.into());
+        let mut update_interval = tokio::time::interval(config.auto_update.timeout);
 
-        eprintln!("Starting daemon...");
+        log::warn!("Starting daemon...");
         loop {
             tokio::select! {
-                _ = shutdown.handle() => {
-                        eprintln!("Got shutdown signal. Exiting...");
+                () = shutdown.handle() => {
+                        log::warn!("Got shutdown signal. Exiting...");
                         break;
                     },
                 _ = update_interval.tick() => {
                     if let Err(error) = update_cmd.perform_update(&config, cache.clone()).await {
-                        eprintln!("Error when performing update command: {error:?}");
+                        log::error!("Error when performing update command: {error:?}");
                     }
                 }
             }

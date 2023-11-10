@@ -1,4 +1,5 @@
 mod daemon_cmd;
+mod flush_cmd;
 mod update_cmd;
 
 use crate::config::Config;
@@ -34,7 +35,10 @@ impl GlobalOptions {
             fs::copy(EXAMPLE_CONFIG_PATH, DEFAULT_CONFIG_PATH)?;
         };
 
-        Config::from_file(&self.config)
+        let config = Config::from_file(&self.config)?;
+        config.init_logger();
+
+        Ok(config)
     }
 }
 
@@ -44,4 +48,5 @@ pub(crate) enum Command {
     #[clap(disable_version_flag = true)]
     Update(update_cmd::Command),
     RunDaemon(daemon_cmd::Command),
+    Flush(flush_cmd::Command),
 }

@@ -1,7 +1,6 @@
 use super::{CliCommand, GlobalOptions};
-use crate::{config::Config, source::SourcesCache};
+use crate::{config::Config, nf_helpers::NfSet, source::SourcesCache};
 use anyhow::Result;
-use nftables::{batch::Batch, helper::apply_ruleset, schema::NfListObject};
 
 #[derive(clap::Parser)]
 pub(crate) struct Command {
@@ -22,29 +21,22 @@ impl Command {
         sources_cache: SourcesCache,
     ) -> Result<()> {
         let chunk_size = config.single_run_append_max.unwrap_or(usize::MAX);
-        eprintln!("Using chunks of {chunk_size} elements for apply operations");
+        log::info!("Using chunks of {chunk_size} elements for apply operations");
 
         for source in &config.sources {
-            let elements = source.download_list(sources_cache.clone()).await?;
-            eprintln!(
-                "Downloaded {} elements for {} set. Applying...",
-                elements.len(),
-                source.set_name
+            let nfset = NfSet::with_template(
+                &source.set_name,
+                &config.table_name,
+                source.set_template.clone(),
             );
+            nfset.flush()?;
 
-            for chunk in elements.chunks(chunk_size) {
-                let mut set = source.create_set(&config.table_name);
-                set.elem = Some(chunk.to_vec());
+            let entries = source.download_list(sources_cache.clone()).await?;
 
-                let mut batch = Batch::new();
-                batch.add(NfListObject::Set(set));
-
-                let nftables = batch.to_nftables();
-                apply_ruleset(&nftables, None, None)?;
-            }
+            nfset.load_entries(entries, chunk_size)?;
         }
 
-        eprintln!("Successfully updated all sources!");
+        log::info!("Successfully updated all sources!");
 
         Ok(())
     }

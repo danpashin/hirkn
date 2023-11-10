@@ -6,7 +6,7 @@ extern crate async_trait;
 
 mod commands;
 mod config;
-mod relative_time;
+mod nf_helpers;
 mod source;
 
 use self::commands::{CliCommand, Command};
@@ -26,5 +26,6 @@ async fn main() -> Result<()> {
     match options.command {
         Command::Update(command) => command.run().await,
         Command::RunDaemon(command) => command.run().await,
+        Command::Flush(command) => command.run().await,
     }
 }
