@@ -1,12 +1,13 @@
 mod cache;
-mod ip;
+mod source_provider;
 
-pub(crate) use self::{cache::Cache as SourcesCache, ip::IP};
-use anyhow::Result;
-use nftables::{
-    expr::{Expression, NamedExpression, Prefix},
-    schema, types,
+use self::source_provider::FetchStatus;
+pub(crate) use self::{
+    cache::Cache as SourcesCache,
+    source_provider::{IPParsable, SourceProvider},
 };
+use anyhow::Result;
+use nftables::{expr::Expression, schema, types};
 use serde::Deserialize;
 use std::collections::{HashSet, LinkedList};
 use tokio::task::JoinSet;
@@ -96,100 +97,18 @@ impl Source {
 }
 
 async fn download_ips_list(url: Url, sources_cache: SourcesCache) -> Result<Vec<Expression>> {
-    let entries = if url.scheme() == "file" {
-        download_imp::local(url, sources_cache).await?
-    } else {
-        download_imp::remote(url, sources_cache).await?
+    let not_older_than = sources_cache.get(&url).await;
+    let provider = SourceProvider::new(url.clone())?;
+
+    let FetchStatus::Success {
+        addresses,
+        modified,
+    } = provider.fetch(not_older_than).await?
+    else {
+        return Ok(vec![]);
     };
 
-    // Optimization step
-    // Ignore empty lines and comments, verify entry is IP or subnet
-    let parsed_entries: Vec<_> = entries
-        .lines()
-        .filter(|entry| !(entry.is_empty() || entry.starts_with('#')))
-        .filter_map(|entry| entry.parse::<IP>().ok())
-        .collect();
+    sources_cache.set(&url, modified).await;
 
-    drop(entries);
-
-    // Collect all ip's and networks back to strings
-    Ok(parsed_entries
-        .into_iter()
-        .map(|entry| match entry {
-            IP::Plain(ip) => Expression::String(ip.to_string()),
-            IP::Prefixed(ip_net) => {
-                let prefix = Prefix {
-                    addr: Box::new(Expression::String(ip_net.network().to_string())),
-                    len: u32::from(ip_net.prefix_len()),
-                };
-
-                Expression::Named(NamedExpression::Prefix(prefix))
-            }
-        })
-        .collect())
-}
-
-mod download_imp {
-    use super::SourcesCache;
-    use anyhow::Result;
-    use std::time::SystemTime;
-    use url::Url;
-
-    pub(super) async fn local(url: Url, sources_cache: SourcesCache) -> Result<String> {
-        let path = url.path();
-
-        let modified_since = std::fs::metadata(path)
-            .and_then(|metadata| metadata.modified())
-            .ok()
-            .and_then(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .map(|modified_since| modified_since.as_secs());
-
-        if let Some(modified_since) = modified_since {
-            let cache_is_newer = sources_cache
-                .get(&url)
-                .await
-                .map_or(false, |value| value >= modified_since);
-
-            if cache_is_newer {
-                return Ok(String::new());
-            }
-
-            sources_cache.set(&url, modified_since).await;
-        }
-
-        Ok(std::fs::read_to_string(url.path())?)
-    }
-
-    pub(super) async fn remote(url: Url, sources_cache: SourcesCache) -> Result<String> {
-        let client = reqwest::Client::new();
-
-        let response = client.head(url.clone()).send().await?;
-        let response = response.error_for_status()?;
-
-        #[allow(clippy::cast_sign_loss)]
-        let modified_since = response
-            .headers()
-            .get("Last-Modified")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|time_string| chrono::DateTime::parse_from_rfc2822(time_string).ok())
-            .map(|value| value.timestamp() as u64);
-
-        if let Some(modified_since) = modified_since {
-            let cache_is_newer = sources_cache
-                .get(&url)
-                .await
-                .map_or(false, |value| value >= modified_since);
-
-            if cache_is_newer {
-                return Ok(String::new());
-            }
-
-            sources_cache.set(&url, modified_since).await;
-        }
-
-        let response = client.get(url.clone()).send().await?;
-        let response = response.error_for_status()?;
-
-        Ok(response.text().await?)
-    }
+    Ok(addresses.into_iter().map(Into::into).collect())
 }
