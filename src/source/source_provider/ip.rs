@@ -1,10 +1,12 @@
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
+use serde::{de, Deserialize, Deserializer};
 use std::{
+    fmt::Formatter,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     str::FromStr,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, Hash)]
 pub(crate) enum IP {
     Single(IpAddr),
     Network(IpNet),
@@ -85,6 +87,32 @@ impl PartialEq<Ipv4Net> for IP {
 impl PartialEq<Ipv6Net> for IP {
     fn eq(&self, other: &Ipv6Net) -> bool {
         self.eq(&IpNet::V6(*other))
+    }
+}
+
+impl<'de> Deserialize<'de> for IP {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct IPVisitor;
+
+        impl<'vde> de::Visitor<'vde> for IPVisitor {
+            type Value = IP;
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                formatter.write_str("valid IPv4/IPv6 or valid CIDR notation")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                IP::from_str(v)
+                    .map_err(|()| de::Error::unknown_variant(v, &["IPv4/IPv6", "CIDR-notation"]))
+            }
+        }
+
+        deserializer.deserialize_string(IPVisitor)
     }
 }
 

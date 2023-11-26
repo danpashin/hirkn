@@ -1,7 +1,10 @@
-use crate::source::Source;
+use crate::source::{Source, IP};
 use anyhow::Result;
+use either::Either;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::{fs::File, path::Path, time::Duration};
+use url::Url;
 
 #[derive(Deserialize)]
 #[serde(default)]
@@ -20,6 +23,9 @@ pub(crate) struct Config {
     pub(crate) table_name: String,
 
     pub(crate) sources: Vec<Source>,
+
+    #[serde(with = "either::serde_untagged_optional")]
+    pub(crate) excluded_ips: Option<Either<Url, HashSet<IP>>>,
 
     pub(crate) single_run_append_max: Option<usize>,
 
@@ -52,6 +58,7 @@ impl Default for Config {
             log_level: log::Level::Info,
             table_name: "fw4".to_string(),
             sources: vec![],
+            excluded_ips: None,
             single_run_append_max: None,
             auto_update: AutoUpdateConfig::default(),
         }

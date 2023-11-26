@@ -1,24 +1,15 @@
+mod info;
 mod ip;
 mod local;
 mod remote;
 
-pub(crate) use self::ip::IP;
+pub(crate) use self::{
+    info::{FetchInfo, FetchStatus},
+    ip::IP,
+};
 use self::{local::IPLocalSource, remote::IPRemoteSource};
 use std::time::{Duration, SystemTime};
 use url::Url;
-
-pub(crate) enum SourceProvider {
-    Local(IPLocalSource),
-    Remote(IPRemoteSource),
-}
-
-pub(crate) enum FetchStatus {
-    NotModified,
-    Success {
-        addresses: Vec<IP>,
-        modified: Duration,
-    },
-}
 
 #[async_trait]
 pub(crate) trait IPParsable {
@@ -49,11 +40,16 @@ pub(crate) trait IPParsable {
             .filter_map(|entry| entry.parse::<IP>().ok())
             .collect();
 
-        Ok(FetchStatus::Success {
+        Ok(FetchStatus::Success(FetchInfo {
             addresses,
             modified,
-        })
+        }))
     }
+}
+
+pub(crate) enum SourceProvider {
+    Local(IPLocalSource),
+    Remote(IPRemoteSource),
 }
 
 impl SourceProvider {

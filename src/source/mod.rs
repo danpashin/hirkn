@@ -4,12 +4,15 @@ mod source_provider;
 use self::source_provider::FetchStatus;
 pub(crate) use self::{
     cache::Cache as SourcesCache,
-    source_provider::{IPParsable, SourceProvider},
+    source_provider::{IPParsable, SourceProvider, IP},
 };
 use anyhow::Result;
 use nftables::{expr::Expression, schema, types};
 use serde::Deserialize;
-use std::collections::{HashSet, LinkedList};
+use std::{
+    collections::{HashSet, LinkedList},
+    sync::Arc,
+};
 use tokio::task::JoinSet;
 use url::Url;
 
@@ -48,30 +51,54 @@ pub(crate) struct Source {
 }
 
 impl Source {
-    pub(crate) async fn download_list(&self, cache: SourcesCache) -> Result<Vec<Expression>> {
-        let Some(first_url) = self.urls.first() else {
-            return Ok(vec![]);
-        };
-
+    pub(crate) async fn download_list(
+        &self,
+        cache: SourcesCache,
+        excluded: Arc<HashSet<IP>>,
+    ) -> Result<Vec<Expression>> {
         if self.urls.len() == 1 {
-            let mut entries = download_ips_list(first_url.clone(), cache).await?;
+            self.download_single_list(cache, excluded).await
+        } else {
+            self.download_multiple_lists(cache, excluded).await
+        }
+    }
 
-            if self.entries_limit != 0 && entries.len() > self.entries_limit {
-                log::warn!(
-                    "Source {} exceeds maximum ({}) number of entries. Got {}. Truncating...",
-                    first_url,
-                    self.entries_limit,
-                    entries.len()
-                );
-                entries.truncate(self.entries_limit);
-            }
+    async fn download_single_list(
+        &self,
+        cache: SourcesCache,
+        excluded: Arc<HashSet<IP>>,
+    ) -> Result<Vec<Expression>> {
+        // url will always exist at this moment
+        // so it's safe
+        let first_url = &self.urls[0];
 
-            return Ok(entries);
+        let mut entries = download_ips_list(first_url.clone(), cache, excluded).await?;
+
+        if self.entries_limit != 0 && entries.len() > self.entries_limit {
+            log::warn!(
+                "Source {} exceeds maximum ({}) number of entries. Got {}. Truncating...",
+                first_url,
+                self.entries_limit,
+                entries.len()
+            );
+            entries.truncate(self.entries_limit);
         }
 
+        Ok(entries)
+    }
+
+    async fn download_multiple_lists(
+        &self,
+        cache: SourcesCache,
+        excluded: Arc<HashSet<IP>>,
+    ) -> Result<Vec<Expression>> {
         let mut active_downloads = JoinSet::new();
         for url in &self.urls {
-            active_downloads.spawn(download_ips_list(url.clone(), cache.clone()));
+            active_downloads.spawn(download_ips_list(
+                url.clone(),
+                cache.clone(),
+                excluded.clone(),
+            ));
         }
 
         let mut entries = LinkedList::new();
@@ -96,19 +123,23 @@ impl Source {
     }
 }
 
-async fn download_ips_list(url: Url, sources_cache: SourcesCache) -> Result<Vec<Expression>> {
+async fn download_ips_list(
+    url: Url,
+    sources_cache: SourcesCache,
+    excluded: Arc<HashSet<IP>>,
+) -> Result<Vec<Expression>> {
     let not_older_than = sources_cache.get(&url).await;
     let provider = SourceProvider::new(url.clone())?;
 
-    let FetchStatus::Success {
-        addresses,
-        modified,
-    } = provider.fetch(not_older_than).await?
-    else {
+    let FetchStatus::Success(mut info) = provider.fetch(not_older_than).await? else {
         return Ok(vec![]);
     };
 
-    sources_cache.set(&url, modified).await;
+    sources_cache.set(&url, info.modified).await;
 
-    Ok(addresses.into_iter().map(Into::into).collect())
+    for excluded_ip in excluded.iter() {
+        info.addresses.remove(excluded_ip);
+    }
+
+    Ok(info.addresses.into_iter().map(Into::into).collect())
 }

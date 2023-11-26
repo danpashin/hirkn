@@ -1,5 +1,9 @@
+mod update_request;
+
+use self::update_request::UpdateRequest;
+pub(crate) use self::update_request::UpdateRequestBuilder;
 use super::{CliCommand, GlobalOptions};
-use crate::{config::Config, nf_helpers::NfSet, source::SourcesCache};
+use crate::nf_helpers::NfSet;
 use anyhow::Result;
 
 #[derive(clap::Parser)]
@@ -15,22 +19,20 @@ impl Command {
         }
     }
 
-    pub(crate) async fn perform_update(
-        &self,
-        config: &Config,
-        sources_cache: SourcesCache,
-    ) -> Result<()> {
-        let chunk_size = config.single_run_append_max.unwrap_or(usize::MAX);
+    pub(crate) async fn perform_update(&self, request: &UpdateRequest) -> Result<()> {
+        let chunk_size = request.chunk_size();
         log::info!("Using chunks of {chunk_size} elements for apply operations");
 
-        for source in &config.sources {
+        for source in &request.config.sources {
             let nfset = NfSet::with_template(
                 &source.set_name,
-                &config.table_name,
+                &request.config.table_name,
                 source.set_template.clone(),
             );
 
-            let entries = source.download_list(sources_cache.clone()).await?;
+            let cache = request.sources_cache();
+            let excluded = request.excluded_ips();
+            let entries = source.download_list(cache, excluded).await?;
             if !entries.is_empty() {
                 nfset.flush()?;
                 nfset.load_entries(entries, chunk_size)?;
@@ -47,8 +49,9 @@ impl Command {
 impl CliCommand for Command {
     async fn run(&self) -> Result<()> {
         let config = self.global_options.parse_config()?;
-        let cache = SourcesCache::new();
-        self.perform_update(&config, cache).await?;
+        let request = UpdateRequestBuilder::new(config).build().await?;
+
+        self.perform_update(&request).await?;
 
         Ok(())
     }

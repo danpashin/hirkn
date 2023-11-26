@@ -1,5 +1,5 @@
 use super::{update_cmd::Command as UpdateCommand, CliCommand, GlobalOptions};
-use crate::source::SourcesCache;
+use crate::commands::update_cmd::UpdateRequestBuilder;
 use anyhow::Result;
 
 #[derive(clap::Parser)]
@@ -16,8 +16,8 @@ impl CliCommand for Command {
         let shutdown = tokio_shutdown::Shutdown::new()?;
         let update_cmd = UpdateCommand::new(self.global_options.clone());
 
-        let cache = SourcesCache::new();
-        let mut update_interval = tokio::time::interval(config.auto_update.timeout);
+        let request = UpdateRequestBuilder::new(config).build().await?;
+        let mut update_interval = tokio::time::interval(request.config.auto_update.timeout);
 
         log::warn!("Starting daemon...");
         loop {
@@ -27,7 +27,7 @@ impl CliCommand for Command {
                         break;
                     },
                 _ = update_interval.tick() => {
-                    if let Err(error) = update_cmd.perform_update(&config, cache.clone()).await {
+                    if let Err(error) = update_cmd.perform_update(&request).await {
                         log::error!("Error when performing update command: {error:?}");
                     }
                 }
