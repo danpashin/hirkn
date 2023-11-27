@@ -18,7 +18,7 @@ pub(crate) struct Config {
     #[serde(with = "either::serde_untagged_optional")]
     pub(crate) excluded_ips: Option<Either<Url, HashSet<IP>>>,
 
-    pub(crate) single_run_append_max: Option<usize>,
+    pub(crate) split_by_chunks: Option<usize>,
 
     pub(crate) update_schedule: Option<String>,
 }
@@ -41,7 +41,7 @@ impl Default for Config {
             table_name: "fw4".to_string(),
             sources: vec![],
             excluded_ips: None,
-            single_run_append_max: None,
+            split_by_chunks: None,
             update_schedule: None,
         }
     }

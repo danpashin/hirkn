@@ -20,7 +20,7 @@ pub(crate) struct UpdateRequest {
 
 impl UpdateRequest {
     pub(crate) fn chunk_size(&self) -> usize {
-        self.config.single_run_append_max.unwrap_or(usize::MAX)
+        self.config.split_by_chunks.unwrap_or(usize::MAX)
     }
 
     pub(crate) fn excluded_ips(&self) -> Arc<HashSet<IP>> {
