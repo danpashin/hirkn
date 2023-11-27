@@ -34,3 +34,4 @@ log = { version = "0.4.20", default-features = false, features = ["serde"] }
 simple_logger = { version = "4.2.0", default-features = false }
 humantime-serde = "1.1.1"
 either = { version = "1.9.0", features = ["serde"] }
+job_scheduler_ng = { git = "https://github.com/danpashin/job_scheduler", rev = "413c09fd" }

@@ -3,17 +3,8 @@ use anyhow::Result;
 use either::Either;
 use serde::Deserialize;
 use std::collections::HashSet;
-use std::{fs::File, path::Path, time::Duration};
+use std::{fs::File, path::Path};
 use url::Url;
-
-#[derive(Deserialize)]
-#[serde(default)]
-pub(crate) struct AutoUpdateConfig {
-    pub(crate) enabled: bool,
-
-    #[serde(with = "humantime_serde")]
-    pub(crate) timeout: Duration,
-}
 
 #[derive(Deserialize)]
 #[serde(default)]
@@ -29,7 +20,7 @@ pub(crate) struct Config {
 
     pub(crate) single_run_append_max: Option<usize>,
 
-    pub(crate) auto_update: AutoUpdateConfig,
+    pub(crate) update_schedule: Option<String>,
 }
 
 impl Config {
@@ -43,15 +34,6 @@ impl Config {
     }
 }
 
-impl Default for AutoUpdateConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            timeout: Duration::from_secs(12 * 60 * 60),
-        }
-    }
-}
-
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -60,7 +42,7 @@ impl Default for Config {
             sources: vec![],
             excluded_ips: None,
             single_run_append_max: None,
-            auto_update: AutoUpdateConfig::default(),
+            update_schedule: None,
         }
     }
 }
