@@ -12,6 +12,15 @@ pub(crate) enum IP {
     Network(IpNet),
 }
 
+impl IP {
+    pub(crate) fn as_network(&self) -> Option<&IpNet> {
+        match self {
+            Self::Single(_) => None,
+            Self::Network(net) => Some(net),
+        }
+    }
+}
+
 impl FromStr for IP {
     type Err = ();
 

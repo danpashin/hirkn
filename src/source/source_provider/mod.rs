@@ -36,6 +36,7 @@ pub(crate) trait IPParsable {
 
         let addresses = raw_list
             .lines()
+            .map(str::trim)
             .filter(|entry| !(entry.is_empty() || entry.starts_with('#')))
             .filter_map(|entry| entry.parse::<IP>().ok())
             .collect();

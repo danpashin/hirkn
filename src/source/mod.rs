@@ -128,18 +128,115 @@ async fn download_ips_list(
     sources_cache: SourcesCache,
     excluded: Arc<HashSet<IP>>,
 ) -> Result<Vec<Expression>> {
+    fn perform_filtering(mut original: HashSet<IP>, to_exclude: &HashSet<IP>) -> HashSet<IP> {
+        // HashSet has O(1)~ complexity for remove operation
+        // So we can remove items without any extra allocations
+
+        // Firstly, remove raw entries presented in list
+        //
+        // For 1.1.1.1 this will remove corresponding 1.1.1.1 entry.
+        // For 192.168.0.0/24 - corresponding 192.168.0.0/24 entry.
+        for excluded_ip in to_exclude {
+            original.remove(excluded_ip);
+        }
+
+        // Shrink original as retain method below has O(capacity) complexity
+        original.shrink_to_fit();
+
+        // Then remove *any* address or subnet that is contained in to_exclude list
+        // For 1.1.1.1/24 this will remove all 1.1.1.1, 1.1.1.2 ... 1.1.1.255 entries
+        //
+        // This algo has O(original * subnets) complexity.
+        // I don't know how to optimize this further yet.
+        let subnets: Vec<_> = to_exclude.iter().filter_map(IP::as_network).collect();
+        if !subnets.is_empty() {
+            original.retain(|ip| {
+                !subnets.iter().any(|subnet| match ip {
+                    IP::Single(ip) => subnet.contains(ip),
+                    IP::Network(ip) => subnet.contains(ip),
+                })
+            });
+        }
+
+        original
+    }
+
     let not_older_than = sources_cache.get(&url).await;
     let provider = SourceProvider::new(url.clone())?;
 
-    let FetchStatus::Success(mut info) = provider.fetch(not_older_than).await? else {
+    let FetchStatus::Success(info) = provider.fetch(not_older_than).await? else {
         return Ok(vec![]);
     };
 
     sources_cache.set(&url, info.modified).await;
 
-    for excluded_ip in excluded.iter() {
-        info.addresses.remove(excluded_ip);
-    }
+    let filtered_ips = perform_filtering(info.addresses, &excluded);
 
-    Ok(info.addresses.into_iter().map(Into::into).collect())
+    Ok(filtered_ips.into_iter().map(Into::into).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SetTemplate, Source, SourcesCache};
+    use std::collections::HashSet;
+    use std::sync::Arc;
+    use url::Url;
+
+    #[tokio::test]
+    async fn download_local_and_filter() {
+        let source_path = "/tmp/hirkn_download_local_and_filter.txt";
+        let ips = "
+        # IPv4
+        192.168.0.1
+        192.168.0.2
+        192.168.0.3
+        192.168.0.14
+        192.168.0.15
+        192.168.1.1
+
+        # Subnets
+        10.10.0.0/16
+        10.11.0.0/16
+
+        # IPv6
+        97e6:2566:e5dd:048e:22d7:7b0f:950b:1907
+        97e6:2566:e5dd:048e:97e6:2566:e5dd:048e
+        ::1
+
+        # Must be presented after filtering
+        192.168.1.2
+        ::2
+        11.10.0.0/16
+        ";
+
+        std::fs::write(source_path, ips).unwrap();
+
+        let set = Source {
+            set_name: "test_set".to_string(),
+            set_template: SetTemplate::default(),
+            urls: vec![Url::from_file_path(source_path).unwrap()],
+            entries_limit: 0,
+        };
+
+        let excluded = Arc::new(HashSet::from([
+            // IPv4 single address and subnet
+            "192.168.1.1".parse().unwrap(),
+            "192.168.0.10/28".parse().unwrap(),
+            // IPv6 single address and subnet
+            "::1".parse().unwrap(),
+            "97e6:2566:e5dd:48e::/64".parse().unwrap(),
+            // Subnets
+            "10.0.0.0/8".parse().unwrap(),
+        ]));
+
+        let cache = SourcesCache::default();
+        let downloaded = set.download_list(cache, excluded).await.unwrap();
+
+        std::fs::remove_file(source_path).unwrap();
+
+        // 192.168.1.1
+        // ::2
+        // 11.10.0.0/16
+        assert_eq!(downloaded.len(), 3);
+    }
 }
